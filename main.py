@@ -1,5 +1,5 @@
 import math
-
+import sys
 
 PRINTABLE_CHARS = {
     "capital_letters": {chr(printable_idx) for printable_idx in range(65, 91)},
@@ -33,8 +33,8 @@ def calculate_password_entropy(password: str):
 
 
 def main():
-    entropy = calculate_password_entropy("AAAAAAAA")
-    print(entropy)
+    entropy = calculate_password_entropy(sys.argv[1])
+    print(f"Password Entropy: {entropy} bits")
 
 
 if __name__ == "__main__":
