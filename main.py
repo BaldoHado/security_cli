@@ -1,5 +1,6 @@
 import math
 import sys
+import click
 
 PRINTABLE_CHARS = {
     "capital_letters": {chr(printable_idx) for printable_idx in range(65, 91)},
@@ -32,10 +33,27 @@ def calculate_password_entropy(password: str):
     return math.floor(math.log2((sum(character_set.values()) ** len(password))))
 
 
-def main():
-    entropy = calculate_password_entropy(sys.argv[1])
+@click.group()
+def cli():
+    pass
+
+
+@click.command()
+def password_entropy():
+    input_pass = input("Enter Password: ")
+    entropy = calculate_password_entropy(input_pass)
+
     print(f"Password Entropy: {entropy} bits")
 
 
+@click.command()
+def secure_messaging_app():
+    pass
+
+
+cli.add_command(password_entropy)
+cli.add_command(secure_messaging_app)
+
+
 if __name__ == "__main__":
-    main()
+    cli()
