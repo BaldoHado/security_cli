@@ -1,6 +1,9 @@
 import math
-import sys
 import click
+import socket
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import PKCS1_OAEP, AES
+from Crypto.Random import get_random_bytes
 
 PRINTABLE_CHARS = {
     "capital_letters": {chr(printable_idx) for printable_idx in range(65, 91)},
@@ -15,6 +18,10 @@ PRINTABLE_CHARS = {
 }
 
 MAX_PRINTABLE_CHARS = 128 - 32
+
+
+ADDRESS = "127.0.0.1"
+PORT_NUMBER = 6868
 
 
 def calculate_password_entropy(password: str):
@@ -48,7 +55,69 @@ def password_entropy():
 
 @click.command()
 def secure_messaging_app():
-    pass
+    session_password = input(f"Enter your shared password: ")
+
+
+def generate_rsa_keys():
+    key = RSA.generate(2048)
+    private_key = key.export_key().decode("utf-8")
+    public_key = key.publickey().export_key().decode("utf-8")
+    return private_key, public_key
+
+
+def generate_shared_key():
+    iv = get_random_bytes(16)
+    aes_key = get_random_bytes(16)
+    cipher = AES.new(aes_key, AES.MODE_CBC, iv)
+    
+
+
+def encrypt_message(public_key, message):
+    cipher = PKCS1_OAEP.new(public_key)
+    return cipher.encrypt(message.encode("utf-8"))
+
+
+def decrypt_message(private_key, ciphertext):
+    cipher = PKCS1_OAEP.new(private_key)
+    return cipher.decrypt(ciphertext).decode("utf-8")
+
+
+def user_one():
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((ADDRESS, PORT_NUMBER))
+    print("Waiting for connection...")
+    conn, addr = server.accept()
+    print(f"Connection established.")
+
+    while True:
+        msg = input("You: ")
+        if msg.lower() == "exit":
+            break
+        conn.sendall(msg.encode())
+        data = conn.recv(1024).decode()
+        if not data:
+            break
+        print(f"Friend: {data}")
+
+    conn.close()
+    server.close()
+
+
+def user_two():
+    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    client.connect((ADDRESS, PORT_NUMBER))
+    print("Connected.")
+    while True:
+        data = client.recv(1024).decode()
+        if not data:
+            break
+        print(f"Friend: {data}")
+        msg = input("You: ")
+        if msg.lower() == "exit":
+            break
+        client.sendall(msg.encode())
+
+    client.close()
 
 
 cli.add_command(password_entropy)
