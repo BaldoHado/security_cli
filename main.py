@@ -1,15 +1,16 @@
 import math
 import click
 import socket
-from Crypto.Protocol.KDF import PBKDF2
 from Crypto.PublicKey import RSA
 from Crypto.Hash import SHA256
 from Crypto.Cipher import PKCS1_OAEP, AES
 from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
-from functools import lru_cache
+import sys
 import json
 import base64
+import threading
+
 
 PRINTABLE_CHARS = {
     "capital_letters": {chr(printable_idx) for printable_idx in range(65, 91)},
@@ -84,9 +85,10 @@ def generate_rsa_keys():
     return private_key, public_key
 
 
-@lru_cache
-def generate_shared_key(shared_password: str, salt: bytes):
-    return PBKDF2(shared_password, salt, 32, count=10000, hmac_hash_module=SHA256)
+def generate_shared_key(shared_password: str):
+    sha_256 = SHA256.new()
+    sha_256.update(shared_password.encode())
+    return sha_256.digest()
 
 
 def rsa_encrypt_message(public_key, message):
@@ -97,6 +99,32 @@ def rsa_encrypt_message(public_key, message):
 def rsa_decrypt_message(private_key, ciphertext):
     cipher = PKCS1_OAEP.new(private_key)
     return cipher.decrypt(ciphertext)
+
+
+def receive_messages(conn, aes_cipher_de):
+    while True:
+        try:
+            encrypted_message = conn.recv(1024)
+            if not encrypted_message:
+                break
+            message = unpad(aes_cipher_de.decrypt(encrypted_message), 16).decode()
+            print(f"\nThem: {message}\nYou: ", end="", flush=True)
+        except Exception as e:
+            print(f"Error receiving message: {e}")
+            break
+
+
+def send_messages(conn, aes_cipher_en):
+    while True:
+        try:
+            msg = input("You: ")
+            if msg.lower() == "exit":
+                conn.close()
+                sys.exit(0)
+            conn.sendall(aes_cipher_en.encrypt(pad(msg.encode(), 16)))
+        except Exception as e:
+            print(f"Error sending message: {e}")
+            break
 
 
 def user_one(conn, shared_password):
@@ -112,21 +140,24 @@ def user_one(conn, shared_password):
     conn.sendall(json.dumps(public_data).encode())
 
     shared_key = rsa_decrypt_message(user_one_private_key, conn.recv(1024))
+    if shared_key != generate_shared_key(shared_password):
+        print(f"Shared passwords do not match. Exiting...")
+        sys.exit(1)
 
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
 
-    while True:
-        msg = input("You: ")
-        if msg.lower() == "exit":
-            break
-        conn.sendall(aes_cipher_en.encrypt(pad(msg.encode(), 16)))
-        received_message = unpad(aes_cipher_de.decrypt(conn.recv(1024)), 16).decode()
-        if not received_message:
-            break
-        print(f"Them: {received_message}")
+    recv_thread = threading.Thread(
+        target=receive_messages, args=(conn, aes_cipher_de), daemon=True
+    )
+    send_thread = threading.Thread(
+        target=send_messages, args=(conn, aes_cipher_en), daemon=True
+    )
 
-    conn.close()
+    recv_thread.start()
+    send_thread.start()
+
+    send_thread.join()
 
 
 def user_two(conn, shared_password):
@@ -137,24 +168,23 @@ def user_two(conn, shared_password):
         base64.b64decode(user_one_public_data["public_key"]),
         base64.b64decode(user_one_public_data["cbc_iv"]),
     )
-    salt = get_random_bytes(16)
-    shared_key = generate_shared_key(shared_password, salt)
+    shared_key = generate_shared_key(shared_password)
     conn.sendall(rsa_encrypt_message(RSA.import_key(user_one_public_key), shared_key))
 
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
 
-    while True:
-        received_message = unpad(aes_cipher_de.decrypt(conn.recv(1024)), 16).decode()
-        if not received_message:
-            break
-        print(f"Them: {received_message}")
-        msg = input("You: ")
-        if msg.lower() == "exit":
-            break
-        conn.sendall(aes_cipher_en.encrypt(pad(msg.encode(), 16)))
+    recv_thread = threading.Thread(
+        target=receive_messages, args=(conn, aes_cipher_de), daemon=True
+    )
+    send_thread = threading.Thread(
+        target=send_messages, args=(conn, aes_cipher_en), daemon=True
+    )
 
-    conn.close()
+    recv_thread.start()
+    send_thread.start()
+
+    send_thread.join()
 
 
 cli.add_command(password_entropy)
