@@ -6,6 +6,7 @@ from Crypto.Hash import SHA256
 from Crypto.Cipher import PKCS1_OAEP, AES
 from Crypto.Random import get_random_bytes
 from Crypto.Util.Padding import pad, unpad
+from Crypto.Signature import pkcs1_15
 import sys
 import json
 import base64
@@ -100,16 +101,26 @@ def generate_rsa_keys() -> Tuple[RSA.RsaKey, RSA.RsaKey]:
     return private_key, public_key
 
 
-def generate_shared_key(shared_password: str) -> bytes:
+def calculate_sha256_hash(message: str) -> bytes:
     """
-    Calculates the SHA256 hash of a strings password and returns the bytes digest.
+    Calculates the SHA256 hash of a message.
 
     Args:
-        shared_password (str): The shared password to hash.
+        message (str): The message to hash.
     """
     sha_256 = SHA256.new()
-    sha_256.update(shared_password.encode())
+    sha_256.update(message.encode())
     return sha_256.digest()
+
+
+def calculate_sha256_hash_object(message: str) -> bytes:
+    """
+    Calculates the SHA256 hash of a message.
+
+    Args:
+        message (str): The message to hash.
+    """
+    return SHA256.new(message.encode())
 
 
 def rsa_encrypt_message(public_key: RSA.RsaKey, message: str) -> bytes:
@@ -136,33 +147,48 @@ def rsa_decrypt_message(private_key: RSA.RsaKey, ciphertext: bytes):
     return cipher.decrypt(ciphertext)
 
 
-def receive_messages(conn: socket.socket, aes_cipher_de: AES):
+def receive_messages(
+    conn: socket.socket, aes_cipher_de: AES, rsa_public_key: RSA.RsaKey
+):
     """
     Receives messages, decrypts and unpads them with a shared key and prints to stdout.
 
     Args:
         conn (socket): The socket connection to receive messages from.
         aes_cipher_de (AES): The decrypt cipher to use for AES decryption.
+        rsa_public_key (RsaKey): The other user's RSA public key for verifying the digital signature.
     """
     while True:
         try:
             encrypted_message = conn.recv(1024)
             if not encrypted_message:
                 break
-            message = unpad(aes_cipher_de.decrypt(encrypted_message), 16).decode()
-            print(f"\nThem: {message}\nYou: ", end="", flush=True)
+            message = json.loads(
+                unpad(aes_cipher_de.decrypt(encrypted_message), 16).decode()
+            )
+            plaintext = base64.b64decode(message["message"]).decode()
+            signature = base64.b64decode(message["signature"])
+            try:
+                pkcs1_15.new(rsa_public_key).verify(
+                    calculate_sha256_hash_object(plaintext), signature
+                )
+            except (ValueError, TypeError):
+                print("Invalid Signature! Exiting...")
+                sys.exit(1)
+            print(f"\nThem: {plaintext}\nYou: ", end="", flush=True)
         except Exception as e:
             print(f"Error receiving message: {e}")
             break
 
 
-def send_messages(conn: socket.socket, aes_cipher_en: AES):
+def send_messages(conn: socket.socket, aes_cipher_en: AES, rsa_private_key: RSA.RsaKey):
     """
     Pads and encrypts a message using AES and sends it through the connection provided.
 
     Args:
         conn (socket): The socket connection to send messages to.
-        aes_cipher_de (AES): The encrypt cipher to use for AES encryption.
+        aes_cipher_en (AES): The encrypt cipher to use for AES encryption.
+        rsa_private_key (RsaKey): The sending user's private key to sign the digital signature.
     """
     while True:
         try:
@@ -170,7 +196,15 @@ def send_messages(conn: socket.socket, aes_cipher_en: AES):
             if msg.lower() == "exit":
                 conn.close()
                 sys.exit(0)
-            conn.sendall(aes_cipher_en.encrypt(pad(msg.encode(), 16)))
+            payload = {
+                "message": base64.b64encode(msg.encode()).decode(),
+                "signature": base64.b64encode(
+                    pkcs1_15.new(rsa_private_key).sign(
+                        calculate_sha256_hash_object(msg)
+                    )
+                ).decode(),
+            }
+            conn.sendall(aes_cipher_en.encrypt(pad(json.dumps(payload).encode(), 16)))
         except Exception as e:
             print(f"Error sending message: {e}")
             break
@@ -194,8 +228,13 @@ def user_one(conn: socket.socket, shared_password: str):
     print(f"Sending RSA public key and IV...")
     conn.sendall(json.dumps(public_data).encode())
 
+    user_two_public_key = RSA.import_key(
+        base64.b64decode(json.loads(conn.recv(1024).decode())["public_key"])
+    )
+    print(f"Received other user's public key.")
+
     shared_key = rsa_decrypt_message(user_one_private_key, conn.recv(1024))
-    if shared_key != generate_shared_key(shared_password):
+    if shared_key != calculate_sha256_hash(shared_password):
         print(f"Shared passwords do not match. Exiting...")
         sys.exit(1)
     print(f"Secure communication established with other user.")
@@ -203,10 +242,14 @@ def user_one(conn: socket.socket, shared_password: str):
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
 
     recv_thread = threading.Thread(
-        target=receive_messages, args=(conn, aes_cipher_de), daemon=True
+        target=receive_messages,
+        args=(conn, aes_cipher_de, user_two_public_key),
+        daemon=True,
     )
     send_thread = threading.Thread(
-        target=send_messages, args=(conn, aes_cipher_en), daemon=True
+        target=send_messages,
+        args=(conn, aes_cipher_en, user_one_private_key),
+        daemon=True,
     )
 
     recv_thread.start()
@@ -223,23 +266,36 @@ def user_two(conn: socket.socket, shared_password: str):
         conn (socket): The connection to send/receive messages from.
         shared_password (str): The shared password that user two inputted.
     """
+    user_two_private_key, user_two_public_key = generate_rsa_keys()
     user_one_public_data = json.loads(conn.recv(1024).decode())
     print(f"Received other user's public key and IV.")
     user_one_public_key, cbc_iv = (
-        base64.b64decode(user_one_public_data["public_key"]),
+        RSA.import_key(base64.b64decode(user_one_public_data["public_key"])),
         base64.b64decode(user_one_public_data["cbc_iv"]),
     )
-    shared_key = generate_shared_key(shared_password)
-    conn.sendall(rsa_encrypt_message(RSA.import_key(user_one_public_key), shared_key))
+
+    public_data = {
+        "public_key": base64.b64encode(user_two_public_key.export_key()).decode(),
+    }
+
+    print(f"Sending RSA public key...")
+    conn.sendall(json.dumps(public_data).encode())
+
+    shared_key = calculate_sha256_hash(shared_password)
+    conn.sendall(rsa_encrypt_message(user_one_public_key, shared_key))
     print(f"Secure communication established with other user.")
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
 
     recv_thread = threading.Thread(
-        target=receive_messages, args=(conn, aes_cipher_de), daemon=True
+        target=receive_messages,
+        args=(conn, aes_cipher_de, user_one_public_key),
+        daemon=True,
     )
     send_thread = threading.Thread(
-        target=send_messages, args=(conn, aes_cipher_en), daemon=True
+        target=send_messages,
+        args=(conn, aes_cipher_en, user_two_private_key),
+        daemon=True,
     )
 
     recv_thread.start()
