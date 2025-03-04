@@ -52,16 +52,16 @@ def cli():
     pass
 
 
-@click.command()
-def password_entropy():
+@click.command(help="Password entropy checking tool")
+def pe():
     input_pass = input("Enter Password: ")
     entropy = calculate_password_entropy(input_pass)
 
     print(f"Password Entropy: {entropy} bits")
 
 
-@click.command()
-def SMA():
+@click.command(help="Secure messaging tool")
+def sm():
     session_password = input(f"Enter your shared password: ")
     try:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -187,8 +187,8 @@ def user_two(conn, shared_password):
     send_thread.join()
 
 
-cli.add_command(password_entropy)
-cli.add_command(SMA)
+cli.add_command(pe)
+cli.add_command(sm)
 
 
 if __name__ == "__main__":
