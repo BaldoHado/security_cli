@@ -10,9 +10,10 @@ import sys
 import json
 import base64
 import threading
+from typing import Tuple
 
 
-PRINTABLE_CHARS = {
+CHARACTER_SETS = {
     "capital_letters": {chr(printable_idx) for printable_idx in range(65, 91)},
     "lowercase_letters": {chr(printable_idx) for printable_idx in range(97, 123)},
     "special_characters": {
@@ -25,26 +26,8 @@ PRINTABLE_CHARS = {
 }
 
 MAX_PRINTABLE_CHARS = 128 - 32
-
-
 ADDRESS = "127.0.0.1"
 PORT_NUMBER = 6868
-
-
-def calculate_password_entropy(password: str):
-    character_set = {
-        "capital_letters": 0,
-        "lowercase_letters": 0,
-        "special_characters": 0,
-        "numbers": 0,
-    }
-    for letter in password:
-        if all(character_set.values()):
-            break
-        for name, chars in PRINTABLE_CHARS.items():
-            if letter in chars:
-                character_set[name] = len(chars)
-    return math.floor(math.log2((sum(character_set.values()) ** len(password))))
 
 
 @click.group()
@@ -54,6 +37,9 @@ def cli():
 
 @click.command(help="Password entropy checking tool")
 def pe():
+    """
+    CLI Function for processing the pe (password entropy) subcommand.
+    """
     input_pass = input("Enter Password: ")
     entropy = calculate_password_entropy(input_pass)
 
@@ -62,6 +48,9 @@ def pe():
 
 @click.command(help="Secure messaging tool")
 def sm():
+    """
+    CLI Function for processing the sm (secure messaging) subcommand.
+    """
     session_password = input(f"Enter your shared password: ")
     try:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -78,30 +67,83 @@ def sm():
         user_two(client, session_password)
 
 
-def generate_rsa_keys():
+def calculate_password_entropy(password: str):
+    """
+    Main function for calculating password entropy.
+    Entropy is calculated with the formula: log2(R^L)
+
+    Args:
+        password (str): The password to evaluate.
+    """
+    character_set = {
+        "capital_letters": 0,
+        "lowercase_letters": 0,
+        "special_characters": 0,
+        "numbers": 0,
+    }
+    for letter in password:
+        if all(character_set.values()):
+            break
+        for name, chars in CHARACTER_SETS.items():
+            if letter in chars:
+                character_set[name] = len(chars)
+    return math.floor(math.log2((sum(character_set.values()) ** len(password))))
+
+
+def generate_rsa_keys() -> Tuple[RSA.RsaKey, RSA.RsaKey]:
+    """
+    Generates public and private RSA keys.
+    """
     key = RSA.generate(2048)
     private_key = key
     public_key = key.publickey()
     return private_key, public_key
 
 
-def generate_shared_key(shared_password: str):
+def generate_shared_key(shared_password: str) -> bytes:
+    """
+    Calculates the SHA256 hash of a strings password and returns the bytes digest.
+
+    Args:
+        shared_password (str): The shared password to hash.
+    """
     sha_256 = SHA256.new()
     sha_256.update(shared_password.encode())
     return sha_256.digest()
 
 
-def rsa_encrypt_message(public_key, message):
+def rsa_encrypt_message(public_key: RSA.RsaKey, message: str) -> bytes:
+    """
+    Uses RSA to encrypt a plaintext message.
+
+    Args:
+        public_key (RsaKey): The public key to use for encryption.
+        message (str): The message to encrypt.
+    """
     cipher = PKCS1_OAEP.new(public_key)
     return cipher.encrypt(message)
 
 
-def rsa_decrypt_message(private_key, ciphertext):
+def rsa_decrypt_message(private_key: RSA.RsaKey, ciphertext: bytes):
+    """
+    Uses RSA to decrypt a hidden message.
+
+    Args:
+        private_key (RsaKey): The private key to use for decryption.
+        ciphertext (bytes): The ciphertext to decrypt.
+    """
     cipher = PKCS1_OAEP.new(private_key)
     return cipher.decrypt(ciphertext)
 
 
-def receive_messages(conn, aes_cipher_de):
+def receive_messages(conn: socket.socket, aes_cipher_de: AES):
+    """
+    Receives messages, decrypts and unpads them with a shared key and prints to stdout.
+
+    Args:
+        conn (socket): The socket connection to receive messages from.
+        aes_cipher_de (AES): The decrypt cipher to use for AES decryption.
+    """
     while True:
         try:
             encrypted_message = conn.recv(1024)
@@ -114,7 +156,14 @@ def receive_messages(conn, aes_cipher_de):
             break
 
 
-def send_messages(conn, aes_cipher_en):
+def send_messages(conn: socket.socket, aes_cipher_en: AES):
+    """
+    Pads and encrypts a message using AES and sends it through the connection provided.
+
+    Args:
+        conn (socket): The socket connection to send messages to.
+        aes_cipher_de (AES): The encrypt cipher to use for AES encryption.
+    """
     while True:
         try:
             msg = input("You: ")
@@ -127,8 +176,14 @@ def send_messages(conn, aes_cipher_en):
             break
 
 
-def user_one(conn, shared_password):
+def user_one(conn: socket.socket, shared_password: str):
+    """
+    Workflow for first user to establish a shared password over an insecure channel.
 
+    Args:
+        conn (socket): The connection to send/receive messages from.
+        shared_password (str): The shared password that user one inputted.
+    """
     user_one_private_key, user_one_public_key = generate_rsa_keys()
     cbc_iv = get_random_bytes(16)
     public_data = {
@@ -160,8 +215,14 @@ def user_one(conn, shared_password):
     send_thread.join()
 
 
-def user_two(conn, shared_password):
+def user_two(conn: socket.socket, shared_password: str):
+    """
+    Workflow for second user to establish a shared password over an insecure channel.
 
+    Args:
+        conn (socket): The connection to send/receive messages from.
+        shared_password (str): The shared password that user two inputted.
+    """
     user_one_public_data = json.loads(conn.recv(1024).decode())
 
     user_one_public_key, cbc_iv = (
