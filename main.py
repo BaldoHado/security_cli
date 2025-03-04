@@ -191,14 +191,14 @@ def user_one(conn: socket.socket, shared_password: str):
         "cbc_iv": base64.b64encode(cbc_iv).decode(),
     }
 
-    print(f"Sending public key data and initialization vector AES CBC Encryption...")
+    print(f"Sending RSA public key and IV...")
     conn.sendall(json.dumps(public_data).encode())
 
     shared_key = rsa_decrypt_message(user_one_private_key, conn.recv(1024))
     if shared_key != generate_shared_key(shared_password):
         print(f"Shared passwords do not match. Exiting...")
         sys.exit(1)
-
+    print(f"Secure communication established with other user.")
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
 
@@ -224,14 +224,14 @@ def user_two(conn: socket.socket, shared_password: str):
         shared_password (str): The shared password that user two inputted.
     """
     user_one_public_data = json.loads(conn.recv(1024).decode())
-
+    print(f"Received other user's public key and IV.")
     user_one_public_key, cbc_iv = (
         base64.b64decode(user_one_public_data["public_key"]),
         base64.b64decode(user_one_public_data["cbc_iv"]),
     )
     shared_key = generate_shared_key(shared_password)
     conn.sendall(rsa_encrypt_message(RSA.import_key(user_one_public_key), shared_key))
-
+    print(f"Secure communication established with other user.")
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
 
