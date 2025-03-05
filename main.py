@@ -12,6 +12,8 @@ import json
 import base64
 import threading
 from typing import Tuple
+from textwrap import dedent
+from loguru import logger
 
 
 CHARACTER_SETS = {
@@ -30,6 +32,10 @@ MAX_PRINTABLE_CHARS = 128 - 32
 ADDRESS = "127.0.0.1"
 PORT_NUMBER = 6868
 
+WELCOME_MESSAGE = """Welcome to the secure messaging application. 
+Start typing below to send messages. 
+Messages received will be red."""
+
 
 @click.group()
 def cli():
@@ -44,7 +50,7 @@ def pe():
     input_pass = input("Enter Password: ")
     entropy = calculate_password_entropy(input_pass)
 
-    print(f"Password Entropy: {entropy} bits")
+    logger.info(f"Password Entropy: {entropy} bits")
 
 
 @click.command(help="Secure messaging tool")
@@ -57,14 +63,14 @@ def sm():
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.bind((ADDRESS, PORT_NUMBER))
         server.listen()
-        print("Waiting for connection...")
+        logger.info("Waiting for connection...")
         conn, _ = server.accept()
         user_one(conn, session_password)
         server.close()
     except socket.error:
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect((ADDRESS, PORT_NUMBER))
-        print("Connected.")
+        logger.info("Connected.")
         user_two(client, session_password)
 
 
@@ -173,11 +179,12 @@ def receive_messages(
                     calculate_sha256_hash_object(plaintext), signature
                 )
             except (ValueError, TypeError):
-                print("Invalid Signature! Exiting...")
+                logger.error("Invalid Signature! Exiting...")
                 sys.exit(1)
-            print(f"\nThem: {plaintext}\nYou: ", end="", flush=True)
+            click.echo(click.style(plaintext, fg="bright_red"))
+            sys.stdout.flush()
         except Exception as e:
-            print(f"Error receiving message: {e}")
+            logger.error(f"Error receiving message: {e}")
             break
 
 
@@ -192,7 +199,7 @@ def send_messages(conn: socket.socket, aes_cipher_en: AES, rsa_private_key: RSA.
     """
     while True:
         try:
-            msg = input("You: ")
+            msg = input()
             if msg.lower() == "exit":
                 conn.close()
                 sys.exit(0)
@@ -206,7 +213,7 @@ def send_messages(conn: socket.socket, aes_cipher_en: AES, rsa_private_key: RSA.
             }
             conn.sendall(aes_cipher_en.encrypt(pad(json.dumps(payload).encode(), 16)))
         except Exception as e:
-            print(f"Error sending message: {e}")
+            logger.error(f"Error sending message: {e}")
             break
 
 
@@ -225,22 +232,27 @@ def user_one(conn: socket.socket, shared_password: str):
         "cbc_iv": base64.b64encode(cbc_iv).decode(),
     }
 
-    print(f"Sending RSA public key and IV...")
+    logger.info(f"Sending RSA public key and IV...")
     conn.sendall(json.dumps(public_data).encode())
 
     user_two_public_key = RSA.import_key(
         base64.b64decode(json.loads(conn.recv(1024).decode())["public_key"])
     )
-    print(f"Received other user's public key.")
+    logger.info(f"Received other user's public key.")
 
     shared_key = rsa_decrypt_message(user_one_private_key, conn.recv(1024))
     if shared_key != calculate_sha256_hash(shared_password):
-        print(f"Shared passwords do not match. Exiting...")
+        logger.info(f"Shared passwords do not match. Exiting...")
         sys.exit(1)
-    print(f"Secure communication established with other user.")
+    logger.info(f"Secure communication established with other user.")
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
-
+    click.echo(
+        click.style(
+            dedent(WELCOME_MESSAGE),
+            fg="cyan",
+        )
+    )
     recv_thread = threading.Thread(
         target=receive_messages,
         args=(conn, aes_cipher_de, user_two_public_key),
@@ -268,7 +280,7 @@ def user_two(conn: socket.socket, shared_password: str):
     """
     user_two_private_key, user_two_public_key = generate_rsa_keys()
     user_one_public_data = json.loads(conn.recv(1024).decode())
-    print(f"Received other user's public key and IV.")
+    logger.info(f"Received other user's public key and IV.")
     user_one_public_key, cbc_iv = (
         RSA.import_key(base64.b64decode(user_one_public_data["public_key"])),
         base64.b64decode(user_one_public_data["cbc_iv"]),
@@ -278,15 +290,20 @@ def user_two(conn: socket.socket, shared_password: str):
         "public_key": base64.b64encode(user_two_public_key.export_key()).decode(),
     }
 
-    print(f"Sending RSA public key...")
+    logger.info(f"Sending RSA public key...")
     conn.sendall(json.dumps(public_data).encode())
 
     shared_key = calculate_sha256_hash(shared_password)
     conn.sendall(rsa_encrypt_message(user_one_public_key, shared_key))
-    print(f"Secure communication established with other user.")
+    logger.info(f"Secure communication established with other user.")
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
-
+    click.echo(
+        click.style(
+            dedent(WELCOME_MESSAGE),
+            fg="cyan",
+        )
+    )
     recv_thread = threading.Thread(
         target=receive_messages,
         args=(conn, aes_cipher_de, user_one_public_key),
