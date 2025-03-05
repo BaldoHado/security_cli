@@ -154,7 +154,10 @@ def rsa_decrypt_message(private_key: RSA.RsaKey, ciphertext: bytes):
 
 
 def receive_messages(
-    conn: socket.socket, aes_cipher_de: AES, rsa_public_key: RSA.RsaKey
+    conn: socket.socket,
+    aes_cipher_de: AES,
+    rsa_public_key: RSA.RsaKey,
+    terminate_event: threading.Event,
 ):
     """
     Receives messages, decrypts and unpads them with a shared key and prints to stdout.
@@ -184,11 +187,16 @@ def receive_messages(
             click.echo(click.style(plaintext, fg="bright_red"))
             sys.stdout.flush()
         except Exception as e:
-            logger.error(f"Error receiving message: {e}")
-            break
+            terminate_event.set()
+            sys.exit(0)
 
 
-def send_messages(conn: socket.socket, aes_cipher_en: AES, rsa_private_key: RSA.RsaKey):
+def send_messages(
+    conn: socket.socket,
+    aes_cipher_en: AES,
+    rsa_private_key: RSA.RsaKey,
+    terminate_event: threading.Event,
+):
     """
     Pads and encrypts a message using AES and sends it through the connection provided.
 
@@ -200,8 +208,15 @@ def send_messages(conn: socket.socket, aes_cipher_en: AES, rsa_private_key: RSA.
     while True:
         try:
             msg = input()
-            if msg.lower() == "exit":
+            if terminate_event.is_set():
+                logger.info("The other user disconnected. Exiting...")
                 conn.close()
+                terminate_event.set()
+                sys.exit(0)
+            if msg.lower() == "exit":
+                logger.info("Exiting...")
+                conn.close()
+                terminate_event.set()
                 sys.exit(0)
             payload = {
                 "message": base64.b64encode(msg.encode()).decode(),
@@ -242,8 +257,12 @@ def user_one(conn: socket.socket, shared_password: str):
 
     shared_key = rsa_decrypt_message(user_one_private_key, conn.recv(1024))
     if shared_key != calculate_sha256_hash(shared_password):
-        logger.info(f"Shared passwords do not match. Exiting...")
+        logger.error("Passwords do not match. Exiting...")
+        conn.sendall(b"TERMINATE")
+        conn.close()
         sys.exit(1)
+    else:
+        conn.sendall(b"CONTINUE")
     logger.info(f"Secure communication established with other user.")
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
@@ -253,14 +272,15 @@ def user_one(conn: socket.socket, shared_password: str):
             fg="cyan",
         )
     )
+    terminate_event = threading.Event()
     recv_thread = threading.Thread(
         target=receive_messages,
-        args=(conn, aes_cipher_de, user_two_public_key),
+        args=(conn, aes_cipher_de, user_two_public_key, terminate_event),
         daemon=True,
     )
     send_thread = threading.Thread(
         target=send_messages,
-        args=(conn, aes_cipher_en, user_one_private_key),
+        args=(conn, aes_cipher_en, user_one_private_key, terminate_event),
         daemon=True,
     )
 
@@ -295,6 +315,10 @@ def user_two(conn: socket.socket, shared_password: str):
 
     shared_key = calculate_sha256_hash(shared_password)
     conn.sendall(rsa_encrypt_message(user_one_public_key, shared_key))
+    if conn.recv(1024).decode() == "TERMINATE":
+        logger.error("Passwords do not match. Exiting...")
+        conn.close()
+        sys.exit(1)
     logger.info(f"Secure communication established with other user.")
     aes_cipher_en = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
     aes_cipher_de = AES.new(shared_key, AES.MODE_CBC, cbc_iv)
@@ -304,14 +328,15 @@ def user_two(conn: socket.socket, shared_password: str):
             fg="cyan",
         )
     )
+    terminate_event = threading.Event()
     recv_thread = threading.Thread(
         target=receive_messages,
-        args=(conn, aes_cipher_de, user_one_public_key),
+        args=(conn, aes_cipher_de, user_one_public_key, terminate_event),
         daemon=True,
     )
     send_thread = threading.Thread(
         target=send_messages,
-        args=(conn, aes_cipher_en, user_two_private_key),
+        args=(conn, aes_cipher_en, user_two_private_key, terminate_event),
         daemon=True,
     )
 
