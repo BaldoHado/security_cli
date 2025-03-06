@@ -59,6 +59,11 @@ def sm():
     CLI Function for processing the sm (secure messaging) subcommand.
     """
     session_password = input(f"Enter your shared password: ")
+    if (entropy_bits := calculate_password_entropy(session_password)) < 75:
+        logger.error(
+            f"Your password is too weak! Requires at least 75 bits of entropy. The input password had {entropy_bits} bits of entropy."
+        )
+        sys.exit(1)
     try:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.bind((ADDRESS, PORT_NUMBER))
